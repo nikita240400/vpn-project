@@ -1,3 +1,5 @@
 from backend.app.models.user import User
+from backend.app.models.vpn_subscription import VPNSubscription
 
-all = ["User"]
+
+__all__ = ["User", "VPNSubscription"]

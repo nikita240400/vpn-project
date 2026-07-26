@@ -9,6 +9,10 @@ from backend.app.schemas import UserCreate, UserResponse, VPNServer
 from backend.app.schemas.marzban import MarzbanUserCreate
 from backend.app.services.marzban import MarzbanAPIError, marzban_client
 
+from backend.app.services.vpn_subscription_service import (
+    vpn_subscription_service,
+)
+
 router = APIRouter()
 
 
@@ -51,24 +55,12 @@ def create_marzban_user(user: MarzbanUserCreate) -> dict:
         else 0
     )
 
-    payload = {
-        "username": user.username,
-        "status": "active",
-        "expire": expire_timestamp,
-        "data_limit": data_limit_bytes,
-        "data_limit_reset_strategy": "no_reset",
-        "proxies": {
-            "vless": {
-                "flow": "",
-            }
-        },
-        "inbounds": {
-            "vless": [
-                "VLESS TCP REALITY",
-            ]
-        },
-        "note": user.note,
-    }
+    return vpn_subscription_service.create_subscription(
+    username=user.username,
+    days=user.days,
+    traffic_gb=user.data_limit_gb,
+    note=user.note,
+)
 
     try:
         return marzban_client.create_user(payload)
