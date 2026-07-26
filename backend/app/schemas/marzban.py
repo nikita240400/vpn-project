@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class MarzbanUserCreate(BaseModel):
+    user_id: int = Field(ge=1)
     username: str = Field(
         min_length=3,
         max_length=32,
@@ -10,3 +11,10 @@ class MarzbanUserCreate(BaseModel):
     days: int = Field(default=30, ge=1, le=365)
     data_limit_gb: int | None = Field(default=None, ge=1)
     note: str | None = None
+
+class SubscriptionExtend(BaseModel):
+    days: int = Field(
+        ge=1,
+        le=365,
+        description="Количество дней для продления",
+    )
