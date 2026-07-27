@@ -11,7 +11,15 @@ from backend.app.services.qrcode_service import generate_qr_base64
 
 
 class MarzbanAPIError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        response_body: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
 
 
 class MarzbanClient:
@@ -84,19 +92,37 @@ class MarzbanClient:
                 timeout=20,
             )
             response.raise_for_status()
+
         except httpx.HTTPStatusError as error:
             raise MarzbanAPIError(
-                f"Не удалось создать пользователя: HTTP "
-                f"{error.response.status_code} — "
-                f"{error.response.text}"
+                message=(
+                    f"Не удалось создать пользователя: HTTP "
+                    f"{error.response.status_code} — "
+                    f"{error.response.text}"
+                ),
+                status_code=error.response.status_code,
+                response_body=error.response.text,
             ) from error
+
         except httpx.RequestError as error:
             raise MarzbanAPIError(
                 f"Нет соединения с Marzban: {error}"
             ) from error
 
         result = response.json()
-        link = result["links"][0]
+
+        links = result.get("links") or []
+
+        if not links:
+            raise MarzbanAPIError(
+                message=(
+                    "Marzban создал пользователя, "
+                    "но не вернул VLESS-ссылку"
+                ),
+                response_body=response.text,
+            )
+
+        link = links[0]
 
         return {
             "username": result["username"],
@@ -104,36 +130,39 @@ class MarzbanClient:
             "link": link,
             "subscription_url": result["subscription_url"],
             "expire": result["expire"],
-            "data_limit": result["data_limit"] or 0,
+            "data_limit": result.get("data_limit") or 0,
             "status": result["status"],
             "qr_code": generate_qr_base64(link),
         }
 
     def modify_user(
-    self,
-    username: str,
-    payload: dict,
-) -> dict:
+        self,
+        username: str,
+        payload: dict,
+    ) -> dict:
         try:
             response = httpx.put(
-            f"{self.base_url}/api/user/{username}",
-            headers=self.headers(),
-            json=payload,
-            timeout=20,
-        )
+                f"{self.base_url}/api/user/{username}",
+                headers=self.headers(),
+                json=payload,
+                timeout=20,
+            )
             response.raise_for_status()
+
         except httpx.HTTPStatusError as error:
             raise MarzbanAPIError(
-            f"Не удалось изменить пользователя {username}: "
-            f"HTTP {error.response.status_code} — "
-            f"{error.response.text}"
-        ) from error
+                f"Не удалось изменить пользователя {username}: "
+                f"HTTP {error.response.status_code} — "
+                f"{error.response.text}"
+            ) from error
+
         except httpx.RequestError as error:
             raise MarzbanAPIError(
-            f"Нет соединения с Marzban: {error}"
-        ) from error
+                f"Нет соединения с Marzban: {error}"
+            ) from error
 
         return response.json()
+
 
     def delete_user(self, username: str) -> None:
         try:
@@ -143,11 +172,13 @@ class MarzbanClient:
                 timeout=20,
             )
             response.raise_for_status()
+
         except httpx.HTTPStatusError as error:
             raise MarzbanAPIError(
                 f"Не удалось удалить пользователя "
                 f"{username}: HTTP {error.response.status_code}"
             ) from error
+
         except httpx.RequestError as error:
             raise MarzbanAPIError(
                 f"Нет соединения с Marzban: {error}"

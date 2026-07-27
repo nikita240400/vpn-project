@@ -7,6 +7,7 @@ from backend.app.services.marzban import (
     MarzbanAPIError,
     marzban_client,
 )
+from backend.app.services.qrcode_service import generate_qr_base64
 
 
 class VPNSubscriptionService:
@@ -52,8 +53,53 @@ class VPNSubscriptionService:
         marzban_user_created = False
 
         try:
-            marzban_result = self.marzban.create_user(payload)
-            marzban_user_created = True
+            try:
+                marzban_result = self.marzban.create_user(payload)
+                marzban_user_created = True
+
+            except MarzbanAPIError as error:
+                if error.status_code != 409:
+                    raise
+
+                existing_subscription = (
+                    db.query(VPNSubscription)
+                    .filter(
+                        VPNSubscription.marzban_username == username,
+                        VPNSubscription.user_id == user_id,
+                    )
+                    .first()
+                )
+
+                if existing_subscription is None:
+                    raise ValueError(
+                        "User already exists in Marzban, "
+                        "but this user's subscription is missing "
+                        "in the database"
+                    ) from error
+
+                return {
+                    "id": existing_subscription.id,
+                    "user_id": existing_subscription.user_id,
+                    "username": (
+                        existing_subscription.marzban_username
+                    ),
+                    "vpn_uuid": existing_subscription.vpn_uuid,
+                    "link": existing_subscription.vless_link,
+                    "subscription_url": (
+                        existing_subscription.subscription_url
+                    ),
+                    "qr_code": generate_qr_base64(
+                        existing_subscription.vless_link
+                    ),
+                    "expires_at": (
+                        existing_subscription.expires_at.isoformat()
+                    ),
+                    "traffic_limit_bytes": (
+                        existing_subscription.traffic_limit_bytes
+                    ),
+                    "status": existing_subscription.status,
+                    "already_exists": True,
+                }
 
             subscription = VPNSubscription(
                 user_id=user_id,
@@ -75,12 +121,16 @@ class VPNSubscriptionService:
                 "user_id": subscription.user_id,
                 "username": subscription.marzban_username,
                 "vpn_uuid": subscription.vpn_uuid,
-                "link": subscription.vless_link,
+                "link": subscription.
+vless_link,
                 "subscription_url": subscription.subscription_url,
                 "qr_code": marzban_result["qr_code"],
                 "expires_at": subscription.expires_at.isoformat(),
-                "traffic_limit_bytes": subscription.traffic_limit_bytes,
+                "traffic_limit_bytes": (
+                    subscription.traffic_limit_bytes
+                ),
                 "status": subscription.status,
+                "already_exists": False,
             }
 
         except Exception:
@@ -113,7 +163,9 @@ class VPNSubscriptionService:
         current_expire = subscription.expires_at
 
         if current_expire.tzinfo is None:
-            current_expire = current_expire.replace(tzinfo=timezone.utc)
+            current_expire = current_expire.replace(
+                tzinfo=timezone.utc
+            )
 
         base_date = max(current_expire, now)
         new_expires_at = base_date + timedelta(days=days)
@@ -135,6 +187,7 @@ class VPNSubscriptionService:
 
             db.commit()
             db.refresh(subscription)
+
             return {
                 "id": subscription.id,
                 "username": subscription.marzban_username,
