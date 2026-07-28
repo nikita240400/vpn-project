@@ -30,8 +30,15 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
+from backend.app.schemas.plan import PlanCreate, PlanUpdate
+
 from backend.app.schemas.marzban import (
-    MarzbanUserCreate,
-    MySubscriptionCreate,
-    SubscriptionExtend,
+     MarzbanUserCreate,
+     MySubscriptionCreate,
+     SubscriptionExtend,
+)
+
+from backend.app.schemas.server import (
+    ServerCreate,
+    ServerUpdate,
 )

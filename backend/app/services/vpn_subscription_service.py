@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from backend.app.models.plan import Plan
 from backend.app.models.vpn_subscription import VPNSubscription
 from backend.app.services.marzban import (
     MarzbanAPIError,
@@ -19,15 +20,26 @@ class VPNSubscriptionService:
         db: Session,
         user_id: int,
         username: str,
-        days: int,
-        traffic_gb: int | None,
+        plan_id: int,
         note: str | None,
     ) -> dict:
-        expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+
+        plan = db.get(Plan, plan_id)
+
+        if plan is None:
+            raise ValueError("Plan not found")
+
+        if not plan.is_active:
+            raise ValueError("Plan is inactive")
+
+        expires_at = (
+            datetime.now(timezone.utc)
+            + timedelta(days=plan.days)
+        )
 
         traffic_limit_bytes = (
-            traffic_gb * 1024**3
-            if traffic_gb is not None
+            plan.traffic_limit_gb * 1024**3
+            if plan.traffic_limit_gb is not None
             else 0
         )
 

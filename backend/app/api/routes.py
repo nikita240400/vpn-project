@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
+from backend.app.models.server import Server
+from backend.app.models.plan import Plan
 from backend.app.models.user import User
 from backend.app.services.marzban import MarzbanAPIError, marzban_client
 from backend.app.models.vpn_subscription import VPNSubscription
@@ -14,6 +16,10 @@ from backend.app.core.dependencies import get_current_user
 from backend.app.schemas import (
     LoginRequest,
     MySubscriptionCreate,
+    PlanCreate,
+    PlanUpdate,
+    ServerCreate,
+    ServerUpdate,
     TokenResponse,
     UserCreate,
     UserResponse,
@@ -25,29 +31,302 @@ from backend.app.schemas.marzban import (
     SubscriptionExtend,
 )
 
+from backend.app.services.server_service import server_service
+
 from backend.app.services.vpn_subscription_service import (
     vpn_subscription_service,
 )
 
 router = APIRouter()
 
+@router.get("/plans")
+def get_plans(
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    plans = (
+        db.query(Plan)
+        .filter(Plan.is_active.is_(True))
+        .order_by(Plan.days.asc())
+        .all()
+    )
+
+    return [
+        {
+            "id": plan.id,
+            "name": plan.name,
+            "price": plan.price,
+            "days": plan.days,
+            "traffic_limit_gb": plan.traffic_limit_gb,
+            "description": plan.description,
+            "is_active": plan.is_active,
+        }
+        for plan in plans
+    ]
+
+@router.post("/admin/plans", status_code=status.HTTP_201_CREATED)
+def create_plan(
+    data: PlanCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    existing_plan = (
+        db.query(Plan)
+        .filter(
+            (Plan.name == data.name)
+            | (Plan.days == data.days)
+        )
+        .first()
+    )
+
+    if existing_plan is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Plan with this name or duration already exists",
+        )
+
+    plan = Plan(
+        name=data.name,
+        price=data.price,
+        days=data.days,
+        traffic_limit_gb=data.traffic_limit_gb,
+        description=data.description,
+        is_active=data.is_active,
+    )
+
+    db.add(plan)
+
+    try:
+        db.commit()
+        db.refresh(plan)
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "id": plan.id,
+        "name": plan.name,
+        "price": plan.price,
+        "days": plan.days,
+        "traffic_limit_gb": plan.traffic_limit_gb,
+        "description": plan.description,
+        "is_active": plan.is_active,
+    }
+
+@router.put("/admin/plans/{plan_id}")
+def update_plan(
+    plan_id: int,
+    data: PlanUpdate,
+    db: Session = Depends(get_db),
+) -> dict:
+    plan = db.get(Plan, plan_id)
+
+    if plan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Plan not found",
+        )
+
+    update_data = data.model_dump(exclude_unset=True)
+
+    if "name" in update_data:
+        duplicate_name = (
+            db.query(Plan)
+            .filter(
+                Plan.name == update_data["name"],
+                Plan.id != plan_id,
+            )
+            .first()
+        )
+
+        if duplicate_name is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Plan with this name already exists",
+            )
+
+    if "days" in update_data:
+        duplicate_days = (
+            db.query(Plan)
+            .filter(
+                Plan.days == update_data["days"],
+                Plan.id != plan_id,
+            )
+            .first()
+        )
+
+        if duplicate_days is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Plan with this duration already exists",
+            )
+
+    for field, value in update_data.items():
+        setattr(plan, field, value)
+
+    try:
+        db.commit()
+        db.refresh(plan)
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "id": plan.id,
+        "name": plan.name,
+        "price": plan.price,
+        "days": plan.days,
+        "traffic_limit_gb": plan.traffic_limit_gb,
+        "description": plan.description,
+        "is_active": plan.is_active,
+    }
+
+@router.get("/")
 
 @router.get("/")
 def root() -> dict[str, str]:
     return {"status": "ok"}
 
+@router.post(
+    "/admin/servers",
+    status_code=status.HTTP_201_CREATED,
+)
+def create_server(
+    data: ServerCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    existing_server = (
+        db.query(Server)
+        .filter(
+            (Server.name == data.name)
+            | (Server.host == data.host)
+        )
+        .first()
+    )
+
+    if existing_server is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Server with this name or host already exists",
+        )
+
+    server = server_service.create(
+        db=db,
+        data=data.model_dump(),
+    )
+
+    return {
+        "id": server.id,
+        "name": server.name,
+        "country": server.country,
+        "city": server.city,
+        "host": server.host,
+        "port": server.port,
+        "marzban_base_url": server.marzban_base_url,
+        "is_active": server.is_active,
+        "priority": server.priority,
+    }
 
 @router.get("/servers", response_model=list[VPNServer])
-def get_servers() -> list[VPNServer]:
+def get_servers(
+    db: Session = Depends(get_db),
+) -> list[VPNServer]:
+    servers = server_service.get_all(db)
+
     return [
         VPNServer(
-            id=1,
-            name="Germany 1",
-            country="Germany",
-            status="online",
+            id=server.id,
+            name=server.name,
+            country=server.country,
+            status="online" if server.is_active else "offline",
         )
+        for server in servers
     ]
 
+@router.put("/admin/servers/{server_id}")
+def update_server(
+    server_id: int,
+    data: ServerUpdate,
+    db: Session = Depends(get_db),
+) -> dict:
+    server = db.get(Server, server_id)
+
+    if server is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Server not found",
+        )
+
+    update_data = data.model_dump(exclude_unset=True)
+
+    if "name" in update_data:
+        duplicate_name = (
+            db.query(Server)
+            .filter(
+                Server.name == update_data["name"],
+                Server.id != server_id,
+            )
+            .first()
+        )
+
+        if duplicate_name is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Server with this name already exists",
+            )
+
+    if "host" in update_data:
+        duplicate_host = (
+            db.query(Server)
+            .filter(
+                Server.host == update_data["host"],
+                Server.id != server_id,
+            )
+            .first()
+        )
+
+        if duplicate_host is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Server with this host already exists",
+            )
+
+    server = server_service.update(
+        db=db,
+        server=server,
+        data=update_data,
+    )
+
+    return {
+        "id": server.id,
+        "name": server.name,
+        "country": server.country,
+        "city": server.city,
+        "host": server.host,
+        "port": server.port,
+        "marzban_base_url": server.marzban_base_url,
+        "is_active": server.is_active,
+        "priority": server.priority,
+    }
+
+@router.delete(
+    "/admin/servers/{server_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_server(
+    server_id: int,
+    db: Session = Depends(get_db),
+) -> None:
+    server = db.get(Server, server_id)
+
+    if server is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Server not found",
+        )
+
+    server_service.delete(
+        db=db,
+        server=server,
+    )
 
 @router.get("/marzban/users")
 def get_marzban_users() -> dict:
@@ -78,8 +357,7 @@ def create_marzban_user(
             db=db,
             user_id=user.user_id,
             username=user.username,
-            days=user.days,
-            traffic_gb=user.data_limit_gb,
+            plan_id=user.plan_id,
             note=user.note,
         )
     except MarzbanAPIError as error:
@@ -312,7 +590,6 @@ def get_me(
         "id": current_user.id,
         "telegram_id": current_user.telegram_id,
         "username": current_user.username,
-        "created_at": current_user.created_at.isoformat(),
     }
 
 @router.get("/me", response_model=UserResponse)
@@ -358,8 +635,7 @@ def create_my_subscription(
             db=db,
             user_id=current_user.id,
             username=data.username,
-            days=data.days,
-            traffic_gb=data.data_limit_gb,
+            plan_id=data.plan_id,
             note=data.note,
         )
     except MarzbanAPIError as error:

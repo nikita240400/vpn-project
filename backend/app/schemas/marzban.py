@@ -8,8 +8,7 @@ class MarzbanUserCreate(BaseModel):
         max_length=32,
         pattern=r"^[a-z0-9_]+$",
     )
-    days: int = Field(default=30, ge=1, le=365)
-    data_limit_gb: int | None = Field(default=None, ge=1)
+    plan_id: int = Field(ge=1)
     note: str | None = None
 
 class MySubscriptionCreate(BaseModel):
@@ -18,8 +17,7 @@ class MySubscriptionCreate(BaseModel):
         max_length=32,
         pattern=r"^[a-z0-9_]+$",
     )
-    days: int = Field(default=30, ge=1, le=365)
-    data_limit_gb: int | None = Field(default=None, ge=1)
+    plan_id: int = Field(ge=1)
     note: str | None = None
 
 class SubscriptionExtend(BaseModel):
