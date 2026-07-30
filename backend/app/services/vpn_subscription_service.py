@@ -3,27 +3,25 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from backend.app.models.plan import Plan
+from backend.app.models.server import Server
 from backend.app.models.vpn_subscription import VPNSubscription
+from backend.app.models.vpn_subscription_server import VPNSubscriptionServer
 from backend.app.services.marzban import (
     MarzbanAPIError,
-    marzban_client,
+    MarzbanClient,
 )
 from backend.app.services.qrcode_service import generate_qr_base64
 
 
 class VPNSubscriptionService:
-    def __init__(self) -> None:
-        self.marzban = marzban_client
-
     def create_subscription(
         self,
         db: Session,
-        user_id: int,
         username: str,
         plan_id: int,
+        user_id: int,
         note: str | None,
     ) -> dict:
-
         plan = db.get(Plan, plan_id)
 
         if plan is None:
@@ -32,9 +30,75 @@ class VPNSubscriptionService:
         if not plan.is_active:
             raise ValueError("Plan is inactive")
 
-        expires_at = (
-            datetime.now(timezone.utc)
-            + timedelta(days=plan.days)
+        servers = (
+            db.query(Server)
+            .filter(Server.is_active.is_(True))
+            .order_by(Server.priority, Server.id)
+            .all()
+        )
+
+        if not servers:
+            raise ValueError("No active servers found")
+
+        existing_subscription = (
+            db.query(VPNSubscription)
+            .join(
+                VPNSubscriptionServer,
+                VPNSubscriptionServer.subscription_id
+                == VPNSubscription.id,
+            )
+            .filter(
+                VPNSubscription.user_id == user_id,
+                VPNSubscriptionServer.marzban_username == username,
+            )
+            .first()
+        )
+
+        if existing_subscription is not None:
+            existing_connections = (
+                db.query(VPNSubscriptionServer)
+                .filter(
+                    VPNSubscriptionServer.subscription_id
+                    == existing_subscription.id
+                )
+                .order_by(
+                    VPNSubscriptionServer.server_id,
+                    VPNSubscriptionServer.id,
+                )
+                .all()
+            )
+
+            return {
+                "id": existing_subscription.id,
+                "user_id": existing_subscription.user_id,
+                "expires_at": (
+                    existing_subscription.expires_at.isoformat()
+                ),
+                "traffic_limit_bytes": (
+                    existing_subscription.traffic_limit_bytes
+                ),
+                "status": existing_subscription.status,
+                "already_exists": True,
+                "servers": [
+                    {
+                        "server_id": connection.server_id,
+                        "username": connection.marzban_username,
+                        "vpn_uuid": connection.vpn_uuid,
+                        "link": connection.vless_link,
+                        "subscription_url": (
+                            connection.subscription_url
+                        ),
+                        "qr_code": generate_qr_base64(
+                            connection.vless_link
+                        ),
+                        "status": connection.status,
+                    }
+                    for connection in existing_connections
+                ],
+            }
+
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=plan.days
         )
 
         traffic_limit_bytes = (
@@ -62,95 +126,97 @@ class VPNSubscriptionService:
             "note": note,
         }
 
-        marzban_user_created = False
+        created_users: list[tuple[MarzbanClient, str]] = []
 
         try:
-            try:
-                marzban_result = self.marzban.create_user(payload)
-                marzban_user_created = True
-
-            except MarzbanAPIError as error:
-                if error.status_code != 409:
-                    raise
-
-                existing_subscription = (
-                    db.query(VPNSubscription)
-                    .filter(
-                        VPNSubscription.marzban_username == username,
-                        VPNSubscription.user_id == user_id,
-                    )
-                    .first()
-                )
-
-                if existing_subscription is None:
-                    raise ValueError(
-                        "User already exists in Marzban, "
-                        "but this user's subscription is missing "
-                        "in the database"
-                    ) from error
-
-                return {
-                    "id": existing_subscription.id,
-                    "user_id": existing_subscription.user_id,
-                    "username": (
-                        existing_subscription.marzban_username
-                    ),
-                    "vpn_uuid": existing_subscription.vpn_uuid,
-                    "link": existing_subscription.vless_link,
-                    "subscription_url": (
-                        existing_subscription.subscription_url
-                    ),
-                    "qr_code": generate_qr_base64(
-                        existing_subscription.vless_link
-                    ),
-                    "expires_at": (
-                        existing_subscription.expires_at.isoformat()
-                    ),
-                    "traffic_limit_bytes": (
-                        existing_subscription.traffic_limit_bytes
-                    ),
-                    "status": existing_subscription.status,
-                    "already_exists": True,
-                }
-
             subscription = VPNSubscription(
-                user_id=user_id,
-                marzban_username=marzban_result["username"],
-                vpn_uuid=marzban_result["vpn_uuid"],
-                subscription_url=marzban_result["subscription_url"],
-                vless_link=marzban_result["link"],
+user_id=user_id,
                 expires_at=expires_at,
                 traffic_limit_bytes=traffic_limit_bytes,
-                status=marzban_result["status"],
+                status="active",
             )
 
             db.add(subscription)
+            db.flush()
+
+            server_results: list[dict] = []
+
+            for server in servers:
+                marzban = MarzbanClient(
+                    base_url=server.marzban_base_url,
+                )
+
+                try:
+                    marzban_result = marzban.create_user(payload)
+                except MarzbanAPIError as error:
+                    if error.status_code == 409:
+                        raise ValueError(
+                            "User already exists in Marzban "
+                            f"on server {server.id}, but the "
+                            "subscription is missing in the "
+                            "backend database"
+                        ) from error
+
+                    raise
+
+                created_username = marzban_result["username"]
+
+                created_users.append(
+                    (
+                        marzban,
+                        created_username,
+                    )
+                )
+
+                connection = VPNSubscriptionServer(
+                    subscription_id=subscription.id,
+                    server_id=server.id,
+                    marzban_username=created_username,
+                    vpn_uuid=marzban_result["vpn_uuid"],
+                    subscription_url=(
+                        marzban_result["subscription_url"]
+                    ),
+                    vless_link=marzban_result["link"],
+                    status=marzban_result["status"],
+                )
+
+                db.add(connection)
+
+                server_results.append(
+                    {
+                        "server_id": server.id,
+                        "username": created_username,
+                        "vpn_uuid": marzban_result["vpn_uuid"],
+                        "link": marzban_result["link"],
+                        "subscription_url": (
+                            marzban_result["subscription_url"]
+                        ),
+                        "qr_code": marzban_result["qr_code"],
+                        "status": marzban_result["status"],
+                    }
+                )
+
             db.commit()
             db.refresh(subscription)
 
             return {
                 "id": subscription.id,
                 "user_id": subscription.user_id,
-                "username": subscription.marzban_username,
-                "vpn_uuid": subscription.vpn_uuid,
-                "link": subscription.
-vless_link,
-                "subscription_url": subscription.subscription_url,
-                "qr_code": marzban_result["qr_code"],
                 "expires_at": subscription.expires_at.isoformat(),
                 "traffic_limit_bytes": (
                     subscription.traffic_limit_bytes
                 ),
                 "status": subscription.status,
                 "already_exists": False,
+                "servers": server_results,
             }
 
         except Exception:
             db.rollback()
 
-            if marzban_user_created:
+            for marzban, created_username in reversed(created_users):
                 try:
-                    self.marzban.delete_user(username)
+                    marzban.delete_user(created_username)
                 except MarzbanAPIError:
                     pass
 
@@ -162,64 +228,116 @@ vless_link,
         subscription_id: int,
         days: int,
     ) -> dict:
-        subscription = (
-            db.query(VPNSubscription)
-            .filter(VPNSubscription.id == subscription_id)
-            .first()
-        )
+        subscription = db.get(VPNSubscription, subscription_id)
 
         if subscription is None:
             raise ValueError("Subscription not found")
 
-        now = datetime.now(timezone.utc)
-        current_expire = subscription.expires_at
+        connections = (
+            db.query(VPNSubscriptionServer)
+            .filter(
+                VPNSubscriptionServer.subscription_id
+                == subscription.id
+            )
+            .order_by(
+                VPNSubscriptionServer.server_id,
+                VPNSubscriptionServer.id,
+            )
+            .all()
+        )
 
-        if current_expire.tzinfo is None:
-            current_expire = current_expire.replace(
-                tzinfo=timezone.utc
+        if not connections:
+            raise ValueError(
+                "Subscription has no server connections"
             )
 
-        base_date = max(current_expire, now)
+        now = datetime.now(timezone.utc)
+        current_expires_at = subscription.expires_at
+
+        if current_expires_at.tzinfo is None:
+            current_expires_at = current_expires_at.replace(
+tzinfo=timezone.utc
+            )
+
+        old_expires_at = current_expires_at
+        base_date = max(current_expires_at, now)
         new_expires_at = base_date + timedelta(days=days)
-        old_expires_at = current_expire
+
+        modified_users: list[tuple[MarzbanClient, str]] = []
+        server_results: list[dict] = []
 
         try:
-            marzban_result = self.marzban.modify_user(
-                subscription.marzban_username,
-                {
-                    "expire": int(new_expires_at.timestamp()),
-                },
-            )
+            for connection in connections:
+                server = db.get(Server, connection.server_id)
+
+                if server is None:
+                    raise ValueError(
+                        f"Server {connection.server_id} not found"
+                    )
+
+                marzban = MarzbanClient(
+                    base_url=server.marzban_base_url,
+                )
+
+                marzban_result = marzban.modify_user(
+                    connection.marzban_username,
+                    {
+                        "expire": int(new_expires_at.timestamp()),
+                    },
+                )
+
+                modified_users.append(
+                    (
+                        marzban,
+                        connection.marzban_username,
+                    )
+                )
+
+                connection.status = marzban_result.get(
+                    "status",
+                    connection.status,
+                )
+
+                server_results.append(
+                    {
+                        "server_id": connection.server_id,
+                        "username": connection.marzban_username,
+                        "status": connection.status,
+                    }
+                )
 
             subscription.expires_at = new_expires_at
-            subscription.status = marzban_result.get(
-                "status",
-                subscription.status,
-            )
+            subscription.status = "active"
 
             db.commit()
             db.refresh(subscription)
 
             return {
                 "id": subscription.id,
-                "username": subscription.marzban_username,
+                "user_id": subscription.user_id,
                 "expires_at": subscription.expires_at.isoformat(),
                 "status": subscription.status,
                 "extended_by_days": days,
+                "servers": server_results,
             }
 
         except Exception:
             db.rollback()
 
-            try:
-                self.marzban.modify_user(
-                    subscription.marzban_username,
-                    {
-                        "expire": int(old_expires_at.timestamp()),
-                    },
-                )
-            except Exception:
-                pass
+            for marzban, modified_username in reversed(
+                modified_users
+            ):
+                try:
+                    marzban.modify_user(
+                        modified_username,
+                        {
+                            "expire": int(
+                                old_expires_at.timestamp()
+                            ),
+                        },
+                    )
+                except Exception:
+                    pass
 
             raise
 
@@ -228,18 +346,48 @@ vless_link,
         db: Session,
         subscription_id: int,
     ) -> dict:
-        subscription = (
-            db.query(VPNSubscription)
-            .filter(VPNSubscription.id == subscription_id)
-            .first()
-        )
+        subscription = db.get(VPNSubscription, subscription_id)
 
         if subscription is None:
             raise ValueError("Subscription not found")
 
-        username = subscription.marzban_username
+        connections = (
+            db.query(VPNSubscriptionServer)
+            .filter(
+                VPNSubscriptionServer.subscription_id
+                == subscription.id
+            )
+            .order_by(
+                VPNSubscriptionServer.server_id,
+                VPNSubscriptionServer.id,
+            )
+            .all()
+        )
 
-        self.marzban.delete_user(username)
+        deleted_servers: list[dict] = []
+
+        for connection in connections:
+            server = db.get(Server, connection.server_id)
+
+            if server is None:
+                raise ValueError(
+                    f"Server {connection.server_id} not found"
+                )
+
+            marzban = MarzbanClient(
+                base_url=server.marzban_base_url,
+            )
+
+            marzban.delete_user(
+                connection.marzban_username
+            )
+
+            deleted_servers.append(
+                {
+                    "server_id": connection.server_id,
+                    "username": connection.marzban_username,
+                }
+            )
 
         try:
             db.delete(subscription)
@@ -250,8 +398,8 @@ vless_link,
 
         return {
             "deleted": True,
-            "subscription_id": subscription_id,
-            "username": username,
+"subscription_id": subscription_id,
+            "servers": deleted_servers,
         }
 
 

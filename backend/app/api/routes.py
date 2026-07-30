@@ -358,6 +358,7 @@ def create_marzban_user(
             user_id=user.user_id,
             username=user.username,
             plan_id=user.plan_id,
+            server_id=user.server_id,
             note=user.note,
         )
     except MarzbanAPIError as error:
@@ -409,12 +410,48 @@ def create_user(
 def get_users(db: Session = Depends(get_db)):
     return db.query(User).all()
 
+def serialize_subscription(
+    subscription: VPNSubscription,
+) -> dict:
+    connections = sorted(
+        subscription.server_connections,
+        key=lambda item: (
+            item.server_id,
+            item.id,
+        ),
+    )
+
+    return {
+        "id": subscription.id,
+        "user_id": subscription.user_id,
+        "expires_at": subscription.expires_at.isoformat(),
+        "traffic_limit_bytes": (
+            subscription.traffic_limit_bytes
+        ),
+        "status": subscription.status,
+        "created_at": subscription.created_at.isoformat(),
+        "servers": [
+            {
+                "server_id": connection.server_id,
+                "username": connection.marzban_username,
+                "vpn_uuid": connection.vpn_uuid,
+                "vless_link": connection.vless_link,
+                "subscription_url": (
+                    connection.subscription_url
+                ),
+                "status": connection.status,
+            }
+            for connection in connections
+        ],
+    }
+
+
 @router.get("/users/{user_id}/subscriptions")
 def get_user_subscriptions(
     user_id: int,
     db: Session = Depends(get_db),
 ) -> list[dict]:
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.get(User, user_id)
 
     if user is None:
         raise HTTPException(
@@ -430,66 +467,19 @@ def get_user_subscriptions(
     )
 
     return [
-        {
-            "id": subscription.id,
-            "user_id": subscription.user_id,
-            "username": subscription.marzban_username,
-            "vpn_uuid": subscription.vpn_uuid,
-            "vless_link": subscription.vless_link,
-            "subscription_url": subscription.subscription_url,
-            "expires_at": subscription.expires_at.isoformat(),
-            "traffic_limit_bytes": subscription.traffic_limit_bytes,
-            "status": subscription.status,
-            "created_at": subscription.created_at.isoformat(),
-        }
+        serialize_subscription(subscription)
         for subscription in subscriptions
     ]
 
-    @router.get("/users/{user_id}/subscriptions")
-    def get_user_subscriptions(
-            user_id: int,
-            db: Session = Depends(get_db),
-    )  -> list[dict]:
-        user = db.query(User).filter(User.id == user_id).first()
 
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    subscriptions = (
-        db.query(VPNSubscription)
-        .filter(VPNSubscription.user_id == user_id)
-        .order_by(VPNSubscription.id.desc())
-        .all()
-    )
-
-    return [
-        {
-            "id": subscription.id,
-            "user_id": subscription.user_id,
-            "username": subscription.marzban_username,
-            "vpn_uuid": subscription.vpn_uuid,
-            "vless_link": subscription.vless_link,
-            "subscription_url": subscription.subscription_url,
-            "expires_at": subscription.expires_at.isoformat(),
-            "traffic_limit_bytes": subscription.traffic_limit_bytes,
-            "status": subscription.status,
-            "created_at": subscription.created_at.isoformat(),
-        }
-        for subscription in subscriptions
-    ]
-
-    @router.get("/subscriptions/{subscription_id}/qr")
-    def get_subscription_qr(
+@router.get("/subscriptions/{subscription_id}/qr")
+def get_subscription_qr(
     subscription_id: int,
     db: Session = Depends(get_db),
 ) -> dict:
-        subscription = (
-        db.query(VPNSubscription)
-        .filter(VPNSubscription.id == subscription_id)
-        .first()
+    subscription = db.get(
+        VPNSubscription,
+        subscription_id,
     )
 
     if subscription is None:
@@ -498,10 +488,26 @@ def get_user_subscriptions(
             detail="Subscription not found",
         )
 
+    connections = sorted(
+        subscription.server_connections,
+        key=lambda item: (
+            item.server_id,
+            item.id,
+        ),
+    )
+
     return {
         "subscription_id": subscription.id,
-        "username": subscription.marzban_username,
-        "qr_code": generate_qr_base64(subscription.vless_link),
+        "servers": [
+            {
+                "server_id": connection.server_id,
+                "username": connection.marzban_username,
+                "qr_code": generate_qr_base64(
+                    connection.vless_link
+                ),
+            }
+            for connection in connections
+        ],
     }
 
 
@@ -550,6 +556,7 @@ def delete_subscription(
             detail=str(error),
         ) from error
 
+
 @router.post("/login", response_model=TokenResponse)
 def login(
     data: LoginRequest,
@@ -564,7 +571,10 @@ def login(
     if (
         user is None
         or user.password_hash is None
-        or not verify_password(data.password, user.password_hash)
+        or not verify_password(
+            data.password,
+            user.password_hash,
+        )
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -577,20 +587,7 @@ def login(
         access_token=token,
         token_type="bearer",
     )
-    return TokenResponse(
-    access_token=token,
-    token_type="bearer",
-)
 
-@router.get("/me")
-def get_me(
-    current_user: User = Depends(get_current_user),
-) -> dict:
-    return {
-        "id": current_user.id,
-        "telegram_id": current_user.telegram_id,
-        "username": current_user.username,
-    }
 
 @router.get("/me", response_model=UserResponse)
 def get_me(
@@ -598,32 +595,27 @@ def get_me(
 ) -> User:
     return current_user
 
+
 @router.get("/me/subscriptions")
 def get_my_subscriptions(
-    current_user: User = Depends(get_current_user),
+current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[dict]:
     subscriptions = (
         db.query(VPNSubscription)
-        .filter(VPNSubscription.user_id == current_user.id)
+        .filter(
+            VPNSubscription.user_id == current_user.id
+        )
         .order_by(VPNSubscription.id.desc())
         .all()
     )
 
     return [
-        {
-            "id": subscription.id,
-            "username": subscription.marzban_username,
-            "vpn_uuid": subscription.vpn_uuid,
-            "vless_link": subscription.vless_link,
-            "subscription_url": subscription.subscription_url,
-            "expires_at": subscription.expires_at.isoformat(),
-            "traffic_limit_bytes": subscription.traffic_limit_bytes,
-            "status": subscription.status,
-            "created_at": subscription.created_at.isoformat(),
-        }
+        serialize_subscription(subscription)
         for subscription in subscriptions
     ]
+
+
 @router.post("/me/subscriptions")
 def create_my_subscription(
     data: MySubscriptionCreate,
@@ -638,6 +630,11 @@ def create_my_subscription(
             plan_id=data.plan_id,
             note=data.note,
         )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
     except MarzbanAPIError as error:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -646,5 +643,7 @@ def create_my_subscription(
     except Exception as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Subscription creation failed: {error}",
+            detail=(
+                f"Subscription creation failed: {error}"
+            ),
         ) from error

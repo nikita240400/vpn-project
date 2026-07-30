@@ -9,35 +9,16 @@ from backend.app.database import Base
 class VPNSubscription(Base):
     __tablename__ = "vpn_subscriptions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
 
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
-    )
-
-    marzban_username: Mapped[str] = mapped_column(
-        String(32),
-        unique=True,
-        nullable=False,
-        index=True,
-    )
-
-    vpn_uuid: Mapped[str] = mapped_column(
-        String(36),
-        unique=True,
-        nullable=False,
-    )
-
-    subscription_url: Mapped[str] = mapped_column(
-        String(512),
-        nullable=False,
-    )
-
-    vless_link: Mapped[str] = mapped_column(
-        String(2048),
-        nullable=False,
     )
 
     expires_at: Mapped[datetime] = mapped_column(
@@ -66,4 +47,11 @@ class VPNSubscription(Base):
     user = relationship(
         "User",
         back_populates="vpn_subscriptions",
+    )
+
+    server_connections = relationship(
+        "VPNSubscriptionServer",
+        back_populates="subscription",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

@@ -23,10 +23,15 @@ class MarzbanAPIError(Exception):
 
 
 class MarzbanClient:
-    def __init__(self) -> None:
-        self.base_url = MARZBAN_BASE_URL
-        self.username = MARZBAN_USERNAME
-        self.password = MARZBAN_PASSWORD
+    def __init__(
+        self,
+        base_url: str = MARZBAN_BASE_URL,
+        username: str = MARZBAN_USERNAME,
+        password: str = MARZBAN_PASSWORD,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.username = username
+        self.password = password
         self._token: str | None = None
 
     def login(self) -> str:
