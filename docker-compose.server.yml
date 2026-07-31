@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: vpn-backend-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - vpn_backend_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vpn-backend
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    command:
+      - uvicorn
+      - backend.app.main:app
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  vpn_backend_postgres_data:
