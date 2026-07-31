@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
@@ -130,7 +131,7 @@ class VPNSubscriptionService:
 
         try:
             subscription = VPNSubscription(
-user_id=user_id,
+                user_id=user_id,
                 expires_at=expires_at,
                 traffic_limit_bytes=traffic_limit_bytes,
                 status="active",
@@ -222,6 +223,19 @@ user_id=user_id,
 
             raise
 
+    def get_subscription_by_public_token(
+        self,
+        db: Session,
+        public_token: uuid.UUID,
+    ) -> VPNSubscription | None:
+        return (
+            db.query(VPNSubscription)
+            .filter(
+                VPNSubscription.public_token == public_token
+            )
+            .first()
+        )
+            
     def extend_subscription(
         self,
         db: Session,

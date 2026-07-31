@@ -1,6 +1,8 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
@@ -598,7 +600,7 @@ def get_me(
 
 @router.get("/me/subscriptions")
 def get_my_subscriptions(
-current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[dict]:
     subscriptions = (
@@ -611,10 +613,51 @@ current_user: User = Depends(get_current_user),
     )
 
     return [
-        serialize_subscription(subscription)
+        {
+            **serialize_subscription(subscription),
+            "public_token": str(subscription.public_token),
+        }
         for subscription in subscriptions
     ]
 
+
+@router.get(
+    "/sub/{public_token}",
+    response_class=PlainTextResponse,
+)
+def get_subscription(
+    public_token: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    subscription = (
+        vpn_subscription_service
+        .get_subscription_by_public_token(
+            db=db,
+            public_token=public_token,
+        )
+    )
+
+    if subscription is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Subscription not found",
+        )
+
+    links = [
+        server.vless_link
+        for server in subscription.server_connections
+        if server.status == "active"
+        and server.vless_link
+    ]
+
+
+    if not links:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Subscription not found",
+            )
+
+    return "\n".join(links)
 
 @router.post("/me/subscriptions")
 def create_my_subscription(
@@ -647,3 +690,4 @@ def create_my_subscription(
                 f"Subscription creation failed: {error}"
             ),
         ) from error
+

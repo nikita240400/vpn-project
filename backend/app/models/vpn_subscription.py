@@ -1,6 +1,7 @@
+import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.database import Base
@@ -13,6 +14,13 @@ class VPNSubscription(Base):
         Integer,
         primary_key=True,
         index=True,
+    )
+
+    public_token: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        unique=True,
+        nullable=False,
+        default=uuid.uuid4,
     )
 
     user_id: Mapped[int] = mapped_column(
