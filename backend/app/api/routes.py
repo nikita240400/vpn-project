@@ -686,9 +686,8 @@ def get_subscription(
         )
 
     expire_timestamp = int(expires_at.timestamp())
-    traffic_limit = int(
-        subscription.traffic_limit_bytes or 0
-    )
+    # total=0 means that the subscription has no traffic limit.
+    traffic_limit = 0
 
     metadata = [
         "#profile-title: Напальчник VPN",

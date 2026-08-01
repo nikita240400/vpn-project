@@ -102,11 +102,9 @@ class VPNSubscriptionService:
             days=plan.days
         )
 
-        traffic_limit_bytes = (
-            plan.traffic_limit_gb * 1024**3
-            if plan.traffic_limit_gb is not None
-            else 0
-        )
+        # VPN subscriptions are unlimited by traffic.
+        # Access is restricted only by the expiration date.
+        traffic_limit_bytes = 0
 
         payload = {
             "username": username,
