@@ -359,8 +359,7 @@ def create_marzban_user(
             db=db,
             user_id=user.user_id,
             username=user.username,
-            plan_id=user.plan_id,
-            server_id=user.server_id,
+	    plan_id=user.plan_id,
             note=user.note,
         )
     except MarzbanAPIError as error:
