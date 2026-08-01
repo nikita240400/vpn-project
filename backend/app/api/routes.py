@@ -1,5 +1,4 @@
 import uuid
-from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,6 +10,7 @@ from backend.app.models.server import Server
 from backend.app.models.plan import Plan
 from backend.app.models.user import User
 from backend.app.services.marzban import MarzbanAPIError, marzban_client
+
 from backend.app.models.vpn_subscription import VPNSubscription
 from backend.app.services.qrcode_service import generate_qr_base64
 from backend.app.core.security import hash_password, verify_password
@@ -38,6 +38,10 @@ from backend.app.services.server_service import server_service
 
 from backend.app.services.vpn_subscription_service import (
     vpn_subscription_service,
+)
+
+from backend.app.services.happ_subscription_service import (
+    happ_subscription_service,
 )
 
 router = APIRouter()
@@ -643,33 +647,8 @@ def get_subscription(
             detail="Subscription not found",
         )
 
-    connections = sorted(
-        (
-            connection
-            for connection in subscription.server_connections
-            if connection.status == "active"
-            and connection.vless_link
-            and connection.server is not None
-        ),
-        key=lambda connection: (
-            connection.server.priority,
-            connection.server_id,
-            connection.id,
-        ),
-    )
-
-    links = []
-
-    for connection in connections:
-        link_without_old_name = (
-            connection.vless_link.split("#", 1)[0]
-        )
-        server_name = quote(
-            connection.server.name,
-            safe="",
-        )
-        links.append(
-            f"{link_without_old_name}#{server_name}"
+    links = happ_subscription_service.build_server_links(
+            subscription
         )
 
     if not links:
