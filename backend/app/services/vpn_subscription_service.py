@@ -31,6 +31,38 @@ class VPNSubscriptionService:
             "servers": servers,
         }
 
+    def _build_server_response(
+        self,
+        server: Server,
+        marzban_result: dict,
+        username: str,
+    ) -> dict:
+        return {
+            "server_id": server.id,
+            "username": username,
+            "vpn_uuid": marzban_result["vpn_uuid"],
+            "link": marzban_result["link"],
+            "subscription_url": (marzban_result["subscription_url"]),
+            "qr_code": marzban_result["qr_code"],
+            "status": marzban_result["status"],
+        }
+
+    def _get_active_servers(
+        self,
+        db: Session,
+    ) -> list[Server]:
+        servers = (
+            db.query(Server)
+            .filter(Server.is_active.is_(True))
+            .order_by(Server.priority, Server.id)
+            .all()
+        )
+
+        if not servers:
+            raise ValueError("No active servers found")
+
+        return servers
+
     def create_subscription(
         self,
         db: Session,
@@ -47,15 +79,7 @@ class VPNSubscriptionService:
         if not plan.is_active:
             raise ValueError("Plan is inactive")
 
-        servers = (
-            db.query(Server)
-            .filter(Server.is_active.is_(True))
-            .order_by(Server.priority, Server.id)
-            .all()
-        )
-
-        if not servers:
-            raise ValueError("No active servers found")
+        servers = self._get_active_servers(db)
 
         existing_subscription = (
             db.query(VPNSubscription)
@@ -180,15 +204,11 @@ class VPNSubscriptionService:
                 db.add(connection)
 
                 server_results.append(
-                    {
-                        "server_id": server.id,
-                        "username": created_username,
-                        "vpn_uuid": marzban_result["vpn_uuid"],
-                        "link": marzban_result["link"],
-                        "subscription_url": (marzban_result["subscription_url"]),
-                        "qr_code": marzban_result["qr_code"],
-                        "status": marzban_result["status"],
-                    }
+                    self._build_server_response(
+                        server=server,
+                        marzban_result=marzban_result,
+                        username=created_username,
+                    )
                 )
 
             db.commit()
