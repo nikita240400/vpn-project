@@ -15,6 +15,22 @@ from backend.app.services.qrcode_service import generate_qr_base64
 
 
 class VPNSubscriptionService:
+    def _build_subscription_response(
+        self,
+        subscription: VPNSubscription,
+        servers: list[dict],
+        already_exists: bool,
+    ) -> dict:
+        return {
+            "id": subscription.id,
+            "user_id": subscription.user_id,
+            "expires_at": subscription.expires_at.isoformat(),
+            "traffic_limit_bytes": subscription.traffic_limit_bytes,
+            "status": subscription.status,
+            "already_exists": already_exists,
+            "servers": servers,
+        }
+
     def create_subscription(
         self,
         db: Session,
@@ -45,8 +61,7 @@ class VPNSubscriptionService:
             db.query(VPNSubscription)
             .join(
                 VPNSubscriptionServer,
-                VPNSubscriptionServer.subscription_id
-                == VPNSubscription.id,
+                VPNSubscriptionServer.subscription_id == VPNSubscription.id,
             )
             .filter(
                 VPNSubscription.user_id == user_id,
@@ -59,8 +74,7 @@ class VPNSubscriptionService:
             existing_connections = (
                 db.query(VPNSubscriptionServer)
                 .filter(
-                    VPNSubscriptionServer.subscription_id
-                    == existing_subscription.id
+                    VPNSubscriptionServer.subscription_id == existing_subscription.id
                 )
                 .order_by(
                     VPNSubscriptionServer.server_id,
@@ -69,38 +83,24 @@ class VPNSubscriptionService:
                 .all()
             )
 
-            return {
-                "id": existing_subscription.id,
-                "user_id": existing_subscription.user_id,
-                "expires_at": (
-                    existing_subscription.expires_at.isoformat()
-                ),
-                "traffic_limit_bytes": (
-                    existing_subscription.traffic_limit_bytes
-                ),
-                "status": existing_subscription.status,
-                "already_exists": True,
-                "servers": [
+            return self._build_subscription_response(
+                subscription=existing_subscription,
+                already_exists=True,
+                servers=[
                     {
                         "server_id": connection.server_id,
                         "username": connection.marzban_username,
                         "vpn_uuid": connection.vpn_uuid,
                         "link": connection.vless_link,
-                        "subscription_url": (
-                            connection.subscription_url
-                        ),
-                        "qr_code": generate_qr_base64(
-                            connection.vless_link
-                        ),
+                        "subscription_url": (connection.subscription_url),
+                        "qr_code": generate_qr_base64(connection.vless_link),
                         "status": connection.status,
                     }
                     for connection in existing_connections
                 ],
-            }
+            )
 
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            days=plan.days
-        )
+        expires_at = datetime.now(timezone.utc) + timedelta(days=plan.days)
 
         # VPN subscriptions are unlimited by traffic.
         # Access is restricted only by the expiration date.
@@ -172,9 +172,7 @@ class VPNSubscriptionService:
                     server_id=server.id,
                     marzban_username=created_username,
                     vpn_uuid=marzban_result["vpn_uuid"],
-                    subscription_url=(
-                        marzban_result["subscription_url"]
-                    ),
+                    subscription_url=(marzban_result["subscription_url"]),
                     vless_link=marzban_result["link"],
                     status=marzban_result["status"],
                 )
@@ -187,9 +185,7 @@ class VPNSubscriptionService:
                         "username": created_username,
                         "vpn_uuid": marzban_result["vpn_uuid"],
                         "link": marzban_result["link"],
-                        "subscription_url": (
-                            marzban_result["subscription_url"]
-                        ),
+                        "subscription_url": (marzban_result["subscription_url"]),
                         "qr_code": marzban_result["qr_code"],
                         "status": marzban_result["status"],
                     }
@@ -198,17 +194,11 @@ class VPNSubscriptionService:
             db.commit()
             db.refresh(subscription)
 
-            return {
-                "id": subscription.id,
-                "user_id": subscription.user_id,
-                "expires_at": subscription.expires_at.isoformat(),
-                "traffic_limit_bytes": (
-                    subscription.traffic_limit_bytes
-                ),
-                "status": subscription.status,
-                "already_exists": False,
-                "servers": server_results,
-            }
+            return self._build_subscription_response(
+                subscription=subscription,
+                already_exists=False,
+                servers=server_results,
+            )
 
         except Exception:
             db.rollback()
@@ -228,12 +218,10 @@ class VPNSubscriptionService:
     ) -> VPNSubscription | None:
         return (
             db.query(VPNSubscription)
-            .filter(
-                VPNSubscription.public_token == public_token
-            )
+            .filter(VPNSubscription.public_token == public_token)
             .first()
         )
-            
+
     def extend_subscription(
         self,
         db: Session,
@@ -247,10 +235,7 @@ class VPNSubscriptionService:
 
         connections = (
             db.query(VPNSubscriptionServer)
-            .filter(
-                VPNSubscriptionServer.subscription_id
-                == subscription.id
-            )
+            .filter(VPNSubscriptionServer.subscription_id == subscription.id)
             .order_by(
                 VPNSubscriptionServer.server_id,
                 VPNSubscriptionServer.id,
@@ -259,17 +244,13 @@ class VPNSubscriptionService:
         )
 
         if not connections:
-            raise ValueError(
-                "Subscription has no server connections"
-            )
+            raise ValueError("Subscription has no server connections")
 
         now = datetime.now(timezone.utc)
         current_expires_at = subscription.expires_at
 
         if current_expires_at.tzinfo is None:
-            current_expires_at = current_expires_at.replace(
-tzinfo=timezone.utc
-            )
+            current_expires_at = current_expires_at.replace(tzinfo=timezone.utc)
 
         old_expires_at = current_expires_at
         base_date = max(current_expires_at, now)
@@ -283,9 +264,7 @@ tzinfo=timezone.utc
                 server = db.get(Server, connection.server_id)
 
                 if server is None:
-                    raise ValueError(
-                        f"Server {connection.server_id} not found"
-                    )
+                    raise ValueError(f"Server {connection.server_id} not found")
 
                 marzban = MarzbanClient(
                     base_url=server.marzban_base_url,
@@ -336,16 +315,12 @@ tzinfo=timezone.utc
         except Exception:
             db.rollback()
 
-            for marzban, modified_username in reversed(
-                modified_users
-            ):
+            for marzban, modified_username in reversed(modified_users):
                 try:
                     marzban.modify_user(
                         modified_username,
                         {
-                            "expire": int(
-                                old_expires_at.timestamp()
-                            ),
+                            "expire": int(old_expires_at.timestamp()),
                         },
                     )
                 except Exception:
@@ -365,10 +340,7 @@ tzinfo=timezone.utc
 
         connections = (
             db.query(VPNSubscriptionServer)
-            .filter(
-                VPNSubscriptionServer.subscription_id
-                == subscription.id
-            )
+            .filter(VPNSubscriptionServer.subscription_id == subscription.id)
             .order_by(
                 VPNSubscriptionServer.server_id,
                 VPNSubscriptionServer.id,
@@ -382,17 +354,13 @@ tzinfo=timezone.utc
             server = db.get(Server, connection.server_id)
 
             if server is None:
-                raise ValueError(
-                    f"Server {connection.server_id} not found"
-                )
+                raise ValueError(f"Server {connection.server_id} not found")
 
             marzban = MarzbanClient(
                 base_url=server.marzban_base_url,
             )
 
-            marzban.delete_user(
-                connection.marzban_username
-            )
+            marzban.delete_user(connection.marzban_username)
 
             deleted_servers.append(
                 {
@@ -410,7 +378,7 @@ tzinfo=timezone.utc
 
         return {
             "deleted": True,
-"subscription_id": subscription_id,
+            "subscription_id": subscription_id,
             "servers": deleted_servers,
         }
 
