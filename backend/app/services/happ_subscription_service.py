@@ -1,3 +1,4 @@
+from datetime import timezone
 from urllib.parse import quote
 
 
@@ -35,6 +36,34 @@ class HappSubscriptionService:
             )
 
         return links
+
+    def build_subscription_text(self, subscription) -> str:
+        links = self.build_server_links(subscription)
+
+        if not links:
+            return ""
+
+        expires_at = subscription.expires_at
+
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(
+                tzinfo=timezone.utc,
+            )
+
+        expire_timestamp = int(expires_at.timestamp())
+
+        metadata = [
+            "#profile-title: Напальчник VPN",
+            "#profile-update-interval: 1",
+            (
+                "#subscription-userinfo: "
+                "upload=0; download=0; total=0; "
+                f"expire={expire_timestamp}"
+            ),
+            "#announce: Натяни по глубже",
+        ]
+
+        return "\n".join(metadata + links)
 
 
 happ_subscription_service = HappSubscriptionService()

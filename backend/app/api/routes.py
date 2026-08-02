@@ -647,40 +647,17 @@ def get_subscription(
             detail="Subscription not found",
         )
 
-    links = happ_subscription_service.build_server_links(
-            subscription
-        )
+    content = happ_subscription_service.build_subscription_text(
+        subscription
+    )
 
-    if not links:
+    if not content:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Subscription not found",
         )
 
-    expires_at = subscription.expires_at
-
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(
-            tzinfo=timezone.utc,
-        )
-
-    expire_timestamp = int(expires_at.timestamp())
-    # total=0 means that the subscription has no traffic limit.
-    traffic_limit = 0
-
-    metadata = [
-        "#profile-title: Напальчник VPN",
-        "#profile-update-interval: 1",
-        (
-            "#subscription-userinfo: "
-            f"upload=0; download=0; "
-            f"total={traffic_limit}; "
-            f"expire={expire_timestamp}"
-        ),
-        "#announce: Натяни по глубже",
-    ]
-
-    return "\n".join(metadata + links)
+    return content
 
 
 @router.post("/me/subscriptions")
