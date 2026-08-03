@@ -126,6 +126,21 @@ class VPNSubscriptionService:
             "note": note,
     }
 
+    def _get_active_plan(
+        self,
+        db: Session,
+        plan_id: int,
+    ) -> Plan:
+        plan = db.get(Plan, plan_id)
+
+        if plan is None:
+            raise ValueError("Plan not found")
+
+        if not plan.is_active:
+            raise ValueError("Plan is inactive")
+
+        return plan
+
     def create_subscription(
         self,
         db: Session,
@@ -134,13 +149,10 @@ class VPNSubscriptionService:
         user_id: int,
         note: str | None,
     ) -> dict:
-        plan = db.get(Plan, plan_id)
-
-        if plan is None:
-            raise ValueError("Plan not found")
-
-        if not plan.is_active:
-            raise ValueError("Plan is inactive")
+        plan = self._get_active_plan(
+            db=db,
+            plan_id=plan_id,
+        )
 
         servers = self._get_active_servers(db)
 
