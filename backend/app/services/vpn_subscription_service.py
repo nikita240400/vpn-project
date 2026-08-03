@@ -242,7 +242,6 @@ class VPNSubscriptionService:
                     server=server,
                     payload=payload,
                 )
-                raise
 
                 created_username = marzban_result["username"]
 
