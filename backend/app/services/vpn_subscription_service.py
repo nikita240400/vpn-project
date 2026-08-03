@@ -48,6 +48,23 @@ class VPNSubscriptionService:
             "status": marzban_result["status"],
         }
 
+    def _build_connection(
+        self,
+        subscription: VPNSubscription,
+        server: Server,
+        username: str,
+        marzban_result: dict,
+    ) -> VPNSubscriptionServer:
+        return VPNSubscriptionServer(
+            subscription_id=subscription.id,
+            server_id=server.id,
+            marzban_username=username,
+            vpn_uuid=marzban_result["vpn_uuid"],
+            subscription_url=marzban_result["subscription_url"],
+            vless_link=marzban_result["link"],
+            status=marzban_result["status"],
+        )
+
     def _get_active_servers(
         self,
         db: Session,
@@ -169,11 +186,9 @@ class VPNSubscriptionService:
             server_results: list[dict] = []
 
             for server in servers:
-                marzban, marzban_result = (
-                    marzban_provision_service.create_user(
-                        server=server,
-                        payload=payload,
-                    )
+                marzban, marzban_result = marzban_provision_service.create_user(
+                    server=server,
+                    payload=payload,
                 )
                 raise
 
@@ -186,14 +201,11 @@ class VPNSubscriptionService:
                     )
                 )
 
-                connection = VPNSubscriptionServer(
-                    subscription_id=subscription.id,
-                    server_id=server.id,
-                    marzban_username=created_username,
-                    vpn_uuid=marzban_result["vpn_uuid"],
-                    subscription_url=(marzban_result["subscription_url"]),
-                    vless_link=marzban_result["link"],
-                    status=marzban_result["status"],
+                connection = self._build_connection(
+                    subscription=subscription,
+                    server=server,
+                    username=created_username,
+                    marzban_result=marzban_result,
                 )
 
                 db.add(connection)
@@ -218,11 +230,9 @@ class VPNSubscriptionService:
         except Exception:
             db.rollback()
 
-            for marzban, created_username in reversed(created_users):
-                try:
-                    marzban.delete_user(created_username)
-                except MarzbanAPIError:
-                    pass
+            marzban_provision_service.rollback_created_users(
+                created_users
+            )
 
             raise
 

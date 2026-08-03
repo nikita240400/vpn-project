@@ -32,5 +32,15 @@ class MarzbanProvisionService:
 
         return marzban, result
 
+    def rollback_created_users(
+        self,
+        created_users: list[tuple[MarzbanClient, str]],
+    ) -> None:
+        for marzban, username in reversed(created_users):
+            try:
+                marzban.delete_user(username)
+            except MarzbanAPIError:
+                pass
+
 
 marzban_provision_service = MarzbanProvisionService()
