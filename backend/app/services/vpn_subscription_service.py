@@ -51,7 +51,7 @@ class VPNSubscriptionService:
         self,
         db: Session,
     ) -> list[Server]:
-        servers = (
+        return (
             db.query(Server)
             .filter(Server.is_active.is_(True))
             .order_by(Server.priority, Server.id)
@@ -80,6 +80,9 @@ class VPNSubscriptionService:
             raise ValueError("Plan is inactive")
 
         servers = self._get_active_servers(db)
+
+        if not servers:
+            raise ValueError("No active servers found")
 
         existing_subscription = (
             db.query(VPNSubscription)
