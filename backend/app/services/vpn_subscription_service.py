@@ -7,6 +7,7 @@ from backend.app.models.plan import Plan
 from backend.app.models.server import Server
 from backend.app.models.vpn_subscription import VPNSubscription
 from backend.app.models.vpn_subscription_server import VPNSubscriptionServer
+from backend.app.services.marzban_provision_service import marzban_provision_service
 from backend.app.services.marzban import (
     MarzbanAPIError,
     MarzbanClient,
@@ -168,22 +169,13 @@ class VPNSubscriptionService:
             server_results: list[dict] = []
 
             for server in servers:
-                marzban = MarzbanClient(
-                    base_url=server.marzban_base_url,
+                marzban, marzban_result = (
+                    marzban_provision_service.create_user(
+                        server=server,
+                        payload=payload,
+                    )
                 )
-
-                try:
-                    marzban_result = marzban.create_user(payload)
-                except MarzbanAPIError as error:
-                    if error.status_code == 409:
-                        raise ValueError(
-                            "User already exists in Marzban "
-                            f"on server {server.id}, but the "
-                            "subscription is missing in the "
-                            "backend database"
-                        ) from error
-
-                    raise
+                raise
 
                 created_username = marzban_result["username"]
 
