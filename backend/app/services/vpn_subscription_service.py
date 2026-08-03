@@ -141,6 +141,18 @@ class VPNSubscriptionService:
 
         return plan
 
+    def _build_subscription_settings(
+        self,
+        plan: Plan,
+    ) -> tuple[datetime, int]:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=plan.days)
+
+        # VPN subscriptions are unlimited by traffic.
+        # Access is restricted only by the expiration date.
+        traffic_limit_bytes = 0
+
+        return expires_at, traffic_limit_bytes
+
     def create_subscription(
         self,
         db: Session,
@@ -202,11 +214,9 @@ class VPNSubscriptionService:
                 ],
             )
 
-        expires_at = datetime.now(timezone.utc) + timedelta(days=plan.days)
-
-        # VPN subscriptions are unlimited by traffic.
-        # Access is restricted only by the expiration date.
-        traffic_limit_bytes = 0
+        expires_at, traffic_limit_bytes = (
+            self._build_subscription_settings(plan)
+        )
 
         payload = self._build_payload(
             username=username,
