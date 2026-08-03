@@ -65,6 +65,25 @@ class VPNSubscriptionService:
             status=marzban_result["status"],
         )
 
+    def _create_subscription(
+        self,
+        db: Session,
+        user_id: int,
+        expires_at: datetime,
+        traffic_limit_bytes: int,
+    ) -> VPNSubscription:
+        subscription = VPNSubscription(
+            user_id=user_id,
+            expires_at=expires_at,
+            traffic_limit_bytes=traffic_limit_bytes,
+            status="active",
+        )
+
+        db.add(subscription)
+        db.flush()
+
+        return subscription
+
     def _get_active_servers(
         self,
         db: Session,
@@ -173,15 +192,12 @@ class VPNSubscriptionService:
         created_users: list[tuple[MarzbanClient, str]] = []
 
         try:
-            subscription = VPNSubscription(
-                user_id=user_id,
-                expires_at=expires_at,
-                traffic_limit_bytes=traffic_limit_bytes,
-                status="active",
-            )
-
-            db.add(subscription)
-            db.flush()
+            subscription = self._create_subscription(
+            db=db,
+            user_id=user_id,
+            expires_at=expires_at,
+            traffic_limit_bytes=traffic_limit_bytes,
+        )
 
             server_results: list[dict] = []
 
