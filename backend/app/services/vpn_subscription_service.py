@@ -100,6 +100,32 @@ class VPNSubscriptionService:
 
         return servers
 
+    def _build_payload(
+        self,
+        username: str,
+        expires_at: datetime,
+        traffic_limit_bytes: int,
+        note: str | None,
+    ) -> dict:
+        return {
+            "username": username,
+            "status": "active",
+            "expire": int(expires_at.timestamp()),
+            "data_limit": traffic_limit_bytes,
+            "data_limit_reset_strategy": "no_reset",
+            "proxies": {
+                "vless": {
+                    "flow": "",
+                }
+            },
+            "inbounds": {
+                "vless": [
+                    "VLESS TCP REALITY",
+                ]
+            },
+            "note": note,
+    }
+
     def create_subscription(
         self,
         db: Session,
@@ -170,24 +196,12 @@ class VPNSubscriptionService:
         # Access is restricted only by the expiration date.
         traffic_limit_bytes = 0
 
-        payload = {
-            "username": username,
-            "status": "active",
-            "expire": int(expires_at.timestamp()),
-            "data_limit": traffic_limit_bytes,
-            "data_limit_reset_strategy": "no_reset",
-            "proxies": {
-                "vless": {
-                    "flow": "",
-                }
-            },
-            "inbounds": {
-                "vless": [
-                    "VLESS TCP REALITY",
-                ]
-            },
-            "note": note,
-        }
+        payload = self._build_payload(
+            username=username,
+            expires_at=expires_at,
+            traffic_limit_bytes=traffic_limit_bytes,
+            note=note,
+        )
 
         created_users: list[tuple[MarzbanClient, str]] = []
 
