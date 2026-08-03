@@ -153,6 +153,44 @@ class VPNSubscriptionService:
 
         return expires_at, traffic_limit_bytes
 
+    def _get_existing_subscription(
+        self,
+        db: Session,
+        user_id: int,
+        username: str,
+    ) -> VPNSubscription | None:
+        return (
+            db.query(VPNSubscription)
+            .join(
+                VPNSubscriptionServer,
+                VPNSubscriptionServer.subscription_id
+                == VPNSubscription.id,
+            )
+            .filter(
+                VPNSubscription.user_id == user_id,
+                VPNSubscriptionServer.marzban_username == username,
+            )
+            .first()
+        )
+
+    def _get_subscription_connections(
+        self,
+        db: Session,
+        subscription_id: int,
+    ) -> list[VPNSubscriptionServer]:
+        return (
+            db.query(VPNSubscriptionServer)
+            .filter(
+                VPNSubscriptionServer.subscription_id
+                == subscription_id
+            )
+            .order_by(
+                VPNSubscriptionServer.server_id,
+                VPNSubscriptionServer.id,
+            )
+            .all()
+        )
+
     def create_subscription(
         self,
         db: Session,
@@ -168,33 +206,16 @@ class VPNSubscriptionService:
 
         servers = self._get_active_servers(db)
 
-        if not servers:
-            raise ValueError("No active servers found")
-
-        existing_subscription = (
-            db.query(VPNSubscription)
-            .join(
-                VPNSubscriptionServer,
-                VPNSubscriptionServer.subscription_id == VPNSubscription.id,
-            )
-            .filter(
-                VPNSubscription.user_id == user_id,
-                VPNSubscriptionServer.marzban_username == username,
-            )
-            .first()
+        existing_subscription = self._get_existing_subscription(
+            db=db,
+            user_id=user_id,
+            username=username,
         )
 
         if existing_subscription is not None:
-            existing_connections = (
-                db.query(VPNSubscriptionServer)
-                .filter(
-                    VPNSubscriptionServer.subscription_id == existing_subscription.id
-                )
-                .order_by(
-                    VPNSubscriptionServer.server_id,
-                    VPNSubscriptionServer.id,
-                )
-                .all()
+            existing_connections = self._get_subscription_connections(
+                db=db,
+                subscription_id=existing_subscription.id,
             )
 
             return self._build_subscription_response(
@@ -206,8 +227,10 @@ class VPNSubscriptionService:
                         "username": connection.marzban_username,
                         "vpn_uuid": connection.vpn_uuid,
                         "link": connection.vless_link,
-                        "subscription_url": (connection.subscription_url),
-                        "qr_code": generate_qr_base64(connection.vless_link),
+                        "subscription_url": connection.subscription_url,
+                        "qr_code": generate_qr_base64(
+                            connection.vless_link
+                        ),
                         "status": connection.status,
                     }
                     for connection in existing_connections
@@ -229,18 +252,20 @@ class VPNSubscriptionService:
 
         try:
             subscription = self._create_subscription(
-            db=db,
-            user_id=user_id,
-            expires_at=expires_at,
-            traffic_limit_bytes=traffic_limit_bytes,
-        )
+                db=db,
+                user_id=user_id,
+                expires_at=expires_at,
+                traffic_limit_bytes=traffic_limit_bytes,
+            )
 
             server_results: list[dict] = []
 
             for server in servers:
-                marzban, marzban_result = marzban_provision_service.create_user(
-                    server=server,
-                    payload=payload,
+                marzban, marzban_result = (
+                    marzban_provision_service.create_user(
+                        server=server,
+                        payload=payload,
+                    )
                 )
 
                 created_username = marzban_result["username"]
