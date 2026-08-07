@@ -39,5 +39,22 @@ services:
       postgres:
         condition: service_healthy
 
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vpn-telegram-bot
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    command:
+      - python
+      - -m
+      - telegram_bot.main
+    depends_on:
+      backend:
+        condition: service_started
+
 volumes:
   vpn_backend_postgres_data:

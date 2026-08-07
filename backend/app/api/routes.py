@@ -1,8 +1,9 @@
 import uuid
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
@@ -23,6 +24,7 @@ from backend.app.schemas import (
     PlanUpdate,
     ServerCreate,
     ServerUpdate,
+    TelegramUserSync,
     TokenResponse,
     UserCreate,
     UserResponse,
@@ -412,6 +414,118 @@ def create_user(
 
     return user
 
+@router.post(
+    "/telegram/users/sync",
+    response_model=UserResponse,
+)
+def sync_telegram_user(
+    data: TelegramUserSync,
+    db: Session = Depends(get_db),
+) -> User:
+    user = (
+        db.query(User)
+        .filter(User.telegram_id == data.telegram_id)
+        .first()
+    )
+
+    if user is None:
+        user = User(
+            telegram_id=data.telegram_id,
+            username=data.username,
+            password_hash=None,
+        )
+
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        return user
+
+    if user.username != data.username:
+        user.username = data.username
+        db.commit()
+        db.refresh(user)
+
+    return user
+
+@router.post("/telegram/trial/activate")
+def activate_telegram_trial(
+    data: TelegramUserSync,
+    db: Session = Depends(get_db),
+) -> dict:
+    user = (
+        db.query(User)
+        .filter(User.telegram_id == data.telegram_id)
+        .first()
+    )
+
+    if user is None:
+        user = User(
+            telegram_id=data.telegram_id,
+            username=data.username,
+            password_hash=None,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    elif user.username != data.username:
+        user.username = data.username
+        db.commit()
+        db.refresh(user)
+
+    trial_plan = (
+        db.query(Plan)
+        .filter(
+            Plan.days == 3,
+            Plan.price == 0,
+            Plan.is_active.is_(True),
+        )
+        .order_by(Plan.id.asc())
+        .first()
+    )
+
+    if trial_plan is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Active 3-day trial plan not found",
+        )
+
+    marzban_username = f"tg_{data.telegram_id}"
+
+    try:
+        result = vpn_subscription_service.create_subscription(
+            db=db,
+            user_id=user.id,
+            username=marzban_username,
+            plan_id=trial_plan.id,
+            note="Telegram bot trial",
+        )
+
+        result["subscription_path"] = (
+            f"/sub/{result['public_token']}"
+        )
+
+        return result
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+
+    except MarzbanAPIError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Trial activation failed: {error}",
+        ) from error
+
 @router.get("/users")
 def get_users(db: Session = Depends(get_db)):
     return db.query(User).all()
@@ -451,6 +565,63 @@ def serialize_subscription(
         ],
     }
 
+@router.post("/telegram/account")
+def get_telegram_account(
+    data: TelegramUserSync,
+    db: Session = Depends(get_db),
+) -> dict:
+    user = (
+        db.query(User)
+        .filter(User.telegram_id == data.telegram_id)
+        .first()
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Telegram user not found",
+        )
+
+    subscription = (
+        db.query(VPNSubscription)
+        .filter(VPNSubscription.user_id == user.id)
+        .order_by(VPNSubscription.id.desc())
+        .first()
+    )
+
+    if subscription is None:
+        return {
+            "user": {
+                "id": user.id,
+                "telegram_id": user.telegram_id,
+                "username": user.username,
+            },
+            "subscription": None,
+        }
+
+    subscription_data = serialize_subscription(subscription)
+
+    subscription_data["public_token"] = str(
+        subscription.public_token
+    )
+
+    subscription_data["server_count"] = len(
+        subscription_data["servers"]
+    )
+
+    subscription_data["is_active"] = (
+        subscription.status == "active"
+        and subscription.expires_at > datetime.now(timezone.utc)
+    )
+
+    return {
+        "user": {
+            "id": user.id,
+            "telegram_id": user.telegram_id,
+            "username": user.username,
+        },
+        "subscription": subscription_data,
+    }
 
 @router.get("/users/{user_id}/subscriptions")
 def get_user_subscriptions(
@@ -658,6 +829,130 @@ def get_subscription(
         )
 
     return content
+
+@router.get(
+    "/happ/{public_token}",
+    response_class=HTMLResponse,
+)
+def open_subscription_in_happ(
+    request: Request,
+    public_token: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    subscription = (
+        vpn_subscription_service
+        .get_subscription_by_public_token(
+            db=db,
+            public_token=public_token,
+        )
+    )
+
+    if subscription is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Subscription not found",
+        )
+
+    user = db.get(User, subscription.user_id)
+
+    username = (
+        user.username
+        if user is not None and user.username
+        else f"user_{subscription.user_id}"
+    )
+
+    now = datetime.now(timezone.utc)
+
+    is_active = (
+        subscription.status == "active"
+        and subscription.expires_at > now
+    )
+
+    status_text = (
+        "Активна"
+        if is_active
+        else "Неактивна"
+    )
+
+    days_left = max(
+        0,
+        (subscription.expires_at - now).days,
+    )
+
+    if not is_active:
+        expires_warning = "Подписка неактивна"
+    elif days_left == 0:
+        expires_warning = "Истекает сегодня"
+    elif days_left == 1:
+        expires_warning = "Истекает через день"
+    else:
+        expires_warning = (
+            f"Истекает через {days_left} дн."
+        )
+
+    months = (
+        "января",
+        "февраля",
+        "марта",
+        "апреля",
+        "мая",
+        "июня",
+        "июля",
+        "августа",
+        "сентября",
+        "октября",
+        "ноября",
+        "декабря",
+    )
+
+    expires_at = subscription.expires_at
+
+    expires_text = (
+        f"{expires_at.day:02d} "
+        f"{months[expires_at.month - 1]}, "
+        f"{expires_at.year}"
+    )
+
+    subscription_url = (
+    f"https://176-12-76-67.sslip.io:8443"
+    f"/sub/{public_token}"
+)
+
+    template_path = (
+        Path(__file__).resolve().parent.parent
+        / "templates"
+        / "happ_mini_app.html"
+    )
+
+    html = template_path.read_text(
+        encoding="utf-8",
+    )
+
+    html = (
+        html
+        .replace(
+            "__SUBSCRIPTION_URL__",
+            subscription_url,
+        )
+        .replace(
+            "__USERNAME__",
+            username,
+        )
+        .replace(
+            "__STATUS__",
+            status_text,
+        )
+        .replace(
+            "__EXPIRES_AT__",
+            expires_text,
+        )
+        .replace(
+            "__EXPIRES_WARNING__",
+            expires_warning,
+        )
+    )
+
+    return HTMLResponse(content=html)
 
 
 @router.post("/me/subscriptions")

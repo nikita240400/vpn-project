@@ -13,6 +13,9 @@ class UserCreate(BaseModel):
     username: str | None = None
     password: str
 
+class TelegramUserSync(BaseModel):
+    telegram_id: str
+    username: str | None = None
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

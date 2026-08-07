@@ -25,6 +25,7 @@ class VPNSubscriptionService:
         return {
             "id": subscription.id,
             "user_id": subscription.user_id,
+            "public_token": str(subscription.public_token),
             "expires_at": subscription.expires_at.isoformat(),
             "traffic_limit_bytes": subscription.traffic_limit_bytes,
             "status": subscription.status,
